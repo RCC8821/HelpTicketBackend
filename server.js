@@ -57,3 +57,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server listening on http://localhost:${PORT}`);
   console.log(`=========================================\n`);
 });
+
+
+// Pehle se app.listen(...) likha hoga, uske bilkul niche yeh likh dein:
+module.exports = app;
