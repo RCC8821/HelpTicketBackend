@@ -1,3 +1,6 @@
+
+
+
 // const express = require('express');
 // const router = express.Router();
 // const { Readable } = require('stream');
@@ -8,14 +11,14 @@
 // const LOC_SHEET = 'Location';
 // const TARGET_SHEET = 'Target';
 // const HISTORY_SHEET = 'Revised_History';
-// const FOLDER_ID = '14ohjIcYwV3RCXvmVHGBvsqorFTuqEq0p';
+// const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; // Shared Drive Folder ID
 // const LAST_COL = 'AZ';
 
 // // ---------- Helpers ----------
 // const cleanKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // const pad = (n) => String(n).padStart(2, '0');
 
-// // IST time (server kahin bhi ho)
+// // IST time
 // const nowIST = () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
 // const fmtDate = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 // const fmtDateTime = (d) => `${fmtDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -107,16 +110,14 @@
 //   return { H, colCount: Math.max(headers.length, 1) };
 // }
 
-// // Flexible set helper (Exact match ya cleaned match dono support karega)
+// // Flexible set helper
 // const setFlex = (H, rowData, headerAliases, value) => {
 //   const aliases = Array.isArray(headerAliases) ? headerAliases : [headerAliases];
 //   for (const alias of aliases) {
-//     // 1. Exact match
 //     if (H[alias] !== undefined) {
 //       rowData[H[alias]] = value;
 //       return true;
 //     }
-//     // 2. Cleaned match
 //     const targetKey = cleanKey(alias);
 //     for (const key in H) {
 //       if (cleanKey(key) === targetKey) {
@@ -128,53 +129,74 @@
 //   return false;
 // };
 
-// // Drive upload (Fixed Base64 & Permission Handling)
-// async function saveFile(fileInput, defaultName, mimeType) {
+// // 🔥 Google Drive Shared Drive Compatible Upload Function
+// async function saveFile(fileInput, defaultName) {
 //   if (!drive || !fileInput) {
 //     console.error('❌ Drive instance missing or fileInput empty');
 //     return '';
 //   }
 //   try {
-//     // String (Base64) or Object format extract karein
-//     let rawData = typeof fileInput === 'string' ? fileInput : (fileInput.data || fileInput.base64 || fileInput.url || '');
-//     let fileName = (typeof fileInput === 'object' && fileInput.name) ? fileInput.name : defaultName;
-//     let fileMime = (typeof fileInput === 'object' && fileInput.type) ? fileInput.type : (mimeType || 'image/jpeg');
+//     // Single string ho ya Object ({ base64, mimeType, name } ya { data, type, name })
+//     let rawData = typeof fileInput === 'string' 
+//       ? fileInput 
+//       : (fileInput.base64 || fileInput.data || fileInput.url || '');
+      
+//     let fileName = (typeof fileInput === 'object' && fileInput.name) 
+//       ? fileInput.name 
+//       : defaultName;
+      
+//     let fileMime = (typeof fileInput === 'object' && (fileInput.mimeType || fileInput.type)) 
+//       ? (fileInput.mimeType || fileInput.type) 
+//       : 'image/jpeg';
 
 //     if (!rawData) {
 //       console.error('❌ No Base64 data found in fileInput');
 //       return '';
 //     }
 
-//     // 🔥 FIX: Clean Base64 Data URI Prefix (data:image/png;base64,...)
+//     // Base64 Data URI Prefix remove karein
 //     const cleanBase64 = rawData.replace(/^data:[^;]+;base64,/, '');
-
 //     const buffer = Buffer.from(cleanBase64, 'base64');
 
-//     console.log(`⏳ Uploading "${fileName}" (${buffer.length} bytes) to Google Drive...`);
+//     console.log(`⏳ Uploading "${fileName}" (${buffer.length} bytes) to Drive...`);
 
+//     // Shared Drive Support Flags Added
 //     const r = await drive.files.create({
-//       requestBody: { name: fileName, parents: [FOLDER_ID] },
-//       media: { mimeType: fileMime, body: Readable.from(buffer) },
-//       fields: 'id, webViewLink',
+//       requestBody: {
+//         name: fileName,
+//         parents: [FOLDER_ID],
+//       },
+//       media: {
+//         mimeType: fileMime,
+//         body: Readable.from(buffer),
+//       },
+//       fields: 'id, webViewLink, webContentLink',
 //       supportsAllDrives: true,
+//       supportsTeamDrives: true,
 //     });
 
-//     if (r.data && r.data.id) {
+//     const fileId = r.data.id;
+
+//     if (fileId) {
+//       // Shared Drive Permission Set
 //       try {
 //         await drive.permissions.create({
-//           fileId: r.data.id,
+//           fileId: fileId,
 //           requestBody: { role: 'reader', type: 'anyone' },
 //           supportsAllDrives: true,
+//           supportsTeamDrives: true,
 //         });
 //       } catch (permErr) {
 //         console.warn('⚠️ Permission warning:', permErr.message);
 //       }
-//       console.log('✅ File uploaded successfully! Link:', r.data.webViewLink);
-//       return r.data.webViewLink || '';
+
+//       const link = r.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
+//       console.log('✅ File uploaded successfully! Link:', link);
+//       return link;
 //     }
 //     return '';
 //   } catch (e) {
-//     console.error('❌ saveFile Error:', e.message);
+//     console.error('❌ saveFile Drive Error:', e.message);
 //     return '';
 //   }
 // }
@@ -365,7 +387,7 @@
 
 // // ---------- 3) Create Ticket ----------
 // router.post('/create', (req, res) => {
-//   const { loc, pc, solver, prio, date, issue, raisedBy, files, file } = req.body;
+//   const { loc, pc, solver, prio, date, issue, raisedBy, files, file, image } = req.body;
 
 //   if (!loc || !issue || !pc || !solver) {
 //     return res.status(400).json({ success: false, message: 'Please fill all required fields' });
@@ -406,8 +428,8 @@
 //       const now = nowIST();
 //       const ticketId = `Help_${pad(now.getMonth() + 1)}/${String(now.getFullYear()).slice(-2)}_${String(maxNum + 1).padStart(3, '0')}`;
 
-//       // Images Upload Processing (Handles Array or Single Object/String)
-//       const inputFiles = Array.isArray(files) ? files : (files ? [files] : (file ? [file] : []));
+//       // Image Extraction (Support files, file, image, payload formats)
+//       const inputFiles = Array.isArray(files) ? files : (files ? [files] : (file ? [file] : (image ? [image] : [])));
 //       const urls = [];
 
 //       for (let i = 0; i < inputFiles.length; i++) {
@@ -416,7 +438,7 @@
 //         if (u) urls.push(u);
 //       }
 
-//       console.log(`📁 Uploaded ${urls.length} file(s) for Ticket ${ticketId}:`, urls);
+//       console.log(`📁 Saved ${urls.length} file URL(s) for ${ticketId}:`, urls);
 
 //       // Formulas preserve logic
 //       const fRes = await sheets.spreadsheets.values.get({
@@ -456,7 +478,7 @@
 //         requestBody: { values: [rowData] },
 //       });
 
-//       console.log(`✅ Saved Ticket ${ticketId} at Row ${targetRow}`);
+//       console.log(`✅ Ticket ${ticketId} saved to Google Sheet Row ${targetRow}`);
 //       res.json({ success: true, message: 'Ticket raised successfully!', ticketId });
 //     } catch (error) {
 //       console.error('Create Ticket Error:', error);
@@ -569,7 +591,7 @@
 //           set(['Remark_2', 'Remark 2'], payload.remark || '');
 //           await logHistory(rd, newCount);
 //         } else {
-//           const inputFiles = Array.isArray(payload.files) ? payload.files : (payload.files ? [payload.files] : (payload.file ? [payload.file] : []));
+//           const inputFiles = Array.isArray(payload.files) ? payload.files : (payload.files ? [payload.files] : (payload.file ? [payload.file] : (payload.image ? [payload.image] : [])));
 //           const urls = [];
 //           for (let i = 0; i < inputFiles.length; i++) {
 //             const u = await saveFile(inputFiles[i], `${payload.ticketId}_Proof_${i + 1}.jpg`);
@@ -640,12 +662,14 @@
 
 
 
-
-
 const express = require('express');
 const router = express.Router();
 const { Readable } = require('stream');
 const { sheets, spreadsheetId, drive } = require('../config/googleSheet');
+const NodeCache = require('node-cache'); // Added Node Cache
+
+// Initialize node-cache: stdTTL 300 seconds (5 minutes), checks expired cache every 60 seconds
+const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 const TICKET_SHEET = 'Help_Ticket_FMS';
 const DOER_SHEET = 'Doer_Name';
@@ -654,6 +678,13 @@ const TARGET_SHEET = 'Target';
 const HISTORY_SHEET = 'Revised_History';
 const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; // Shared Drive Folder ID
 const LAST_COL = 'AZ';
+
+// Cache Keys Config
+const CACHE_KEYS = {
+  TICKETS_RAW: 'raw_tickets_rows',
+  DROPDOWNS: 'dropdowns_data',
+  TARGETS: 'user_targets_raw'
+};
 
 // ---------- Helpers ----------
 const cleanKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -777,7 +808,6 @@ async function saveFile(fileInput, defaultName) {
     return '';
   }
   try {
-    // Single string ho ya Object ({ base64, mimeType, name } ya { data, type, name })
     let rawData = typeof fileInput === 'string' 
       ? fileInput 
       : (fileInput.base64 || fileInput.data || fileInput.url || '');
@@ -795,13 +825,11 @@ async function saveFile(fileInput, defaultName) {
       return '';
     }
 
-    // Base64 Data URI Prefix remove karein
     const cleanBase64 = rawData.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(cleanBase64, 'base64');
 
     console.log(`⏳ Uploading "${fileName}" (${buffer.length} bytes) to Drive...`);
 
-    // Shared Drive Support Flags Added
     const r = await drive.files.create({
       requestBody: {
         name: fileName,
@@ -819,7 +847,6 @@ async function saveFile(fileInput, defaultName) {
     const fileId = r.data.id;
 
     if (fileId) {
-      // Shared Drive Permission Set
       try {
         await drive.permissions.create({
           fileId: fileId,
@@ -844,8 +871,16 @@ async function saveFile(fileInput, defaultName) {
 
 async function getUserTargets(userName) {
   try {
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
-    const rows = res.data.values || [];
+    let rows;
+    // Check if targets list is in Cache
+    if (appCache.has(CACHE_KEYS.TARGETS)) {
+      rows = appCache.get(CACHE_KEYS.TARGETS);
+    } else {
+      const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
+      rows = res.data.values || [];
+      appCache.set(CACHE_KEYS.TARGETS, rows, 600); // Cache targets list for 10 minutes
+    }
+
     if (rows.length < 2) return { monthTarget: null, weekTarget: null };
     const t = cleanKey(userName);
     for (let i = 1; i < rows.length; i++) {
@@ -861,9 +896,16 @@ async function getUserTargets(userName) {
   return { monthTarget: null, weekTarget: null };
 }
 
-// ---------- 1) Dropdowns ----------
+// ---------- 1) Dropdowns (With Cache) ----------
 router.get('/dropdowns', async (req, res) => {
   try {
+    // If Dropdowns exist in cache, return immediately
+    if (appCache.has(CACHE_KEYS.DROPDOWNS)) {
+      console.log('⚡ [CACHE] Dropdowns returned from memory');
+      return res.json(appCache.get(CACHE_KEYS.DROPDOWNS));
+    }
+
+    console.log('🌐 [SHEETS] Fetching dropdowns from Google Sheets');
     const locRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${LOC_SHEET}!A2:A1000` });
     const doerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${DOER_SHEET}!A2:B1000` });
 
@@ -872,25 +914,41 @@ router.get('/dropdowns', async (req, res) => {
     const pcs = doers.filter((d) => d[1] && cleanKey(d[1]) === 'pc').map((d) => d[0]);
     const solvers = doers.map((d) => d[0]).filter(Boolean);
 
-    res.json({ success: true, locations, pcs, solvers });
+    const dropdownResponse = { success: true, locations, pcs, solvers };
+    
+    // Store dropdowns in cache for 1 hour (3600 seconds)
+    appCache.set(CACHE_KEYS.DROPDOWNS, dropdownResponse, 3600);
+
+    res.json(dropdownResponse);
   } catch (error) {
     console.error('Dropdown Error:', error);
     res.status(500).json({ success: false, locations: [], pcs: [], solvers: [] });
   }
 });
 
-// ---------- 2) Tickets list + myStats ----------
+// ---------- 2) Tickets list + myStats (With Cache) ----------
 router.get('/', async (req, res) => {
   const { userName, filterType } = req.query;
   if (!userName) return res.status(400).json({ success: false, message: 'User name required' });
 
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
-    });
+    let rows;
 
-    const rows = response.data.values || [];
+    // Check if entire Ticket Rows data is cached
+    if (appCache.has(CACHE_KEYS.TICKETS_RAW)) {
+      console.log('⚡ [CACHE] Tickets raw rows loaded from cache');
+      rows = appCache.get(CACHE_KEYS.TICKETS_RAW);
+    } else {
+      console.log('🌐 [SHEETS] Fetching raw tickets from Google Sheets');
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
+      });
+      rows = response.data.values || [];
+      // Cache the raw sheet values for 5 minutes (300 seconds)
+      appCache.set(CACHE_KEYS.TICKETS_RAW, rows, 300);
+    }
+
     const emptyStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
     if (rows.length < 2) {
       return res.json({ success: true, data: [], counts: { action: 0, raised: 0, assigned: 0 }, myStats: emptyStats });
@@ -1026,7 +1084,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ---------- 3) Create Ticket ----------
+// ---------- 3) Create Ticket (With Cache Invalidation) ----------
 router.post('/create', (req, res) => {
   const { loc, pc, solver, prio, date, issue, raisedBy, files, file, image } = req.body;
 
@@ -1069,7 +1127,7 @@ router.post('/create', (req, res) => {
       const now = nowIST();
       const ticketId = `Help_${pad(now.getMonth() + 1)}/${String(now.getFullYear()).slice(-2)}_${String(maxNum + 1).padStart(3, '0')}`;
 
-      // Image Extraction (Support files, file, image, payload formats)
+      // Image Extraction
       const inputFiles = Array.isArray(files) ? files : (files ? [files] : (file ? [file] : (image ? [image] : [])));
       const urls = [];
 
@@ -1120,6 +1178,11 @@ router.post('/create', (req, res) => {
       });
 
       console.log(`✅ Ticket ${ticketId} saved to Google Sheet Row ${targetRow}`);
+
+      // 🔥 Invalidating Cache so that the next GET loads fresh values
+      appCache.del(CACHE_KEYS.TICKETS_RAW);
+      console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache because a new ticket was created');
+
       res.json({ success: true, message: 'Ticket raised successfully!', ticketId });
     } catch (error) {
       console.error('Create Ticket Error:', error);
@@ -1129,7 +1192,7 @@ router.post('/create', (req, res) => {
   });
 });
 
-// ---------- 4) Ticket Actions ----------
+// ---------- 4) Ticket Actions (With Cache Invalidation) ----------
 router.post('/action', (req, res) => {
   console.log('📥 ACTION RAW BODY:', JSON.stringify(req.body, null, 2));
 
@@ -1289,6 +1352,11 @@ router.post('/action', (req, res) => {
       }
 
       console.log('✅ Action success:', actionType, ticketId);
+
+      // 🔥 Invalidating Cache so that the next GET loads fresh updated action status
+      appCache.del(CACHE_KEYS.TICKETS_RAW);
+      console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache due to action update');
+
       res.json({ success: true, message: 'Action completed successfully' });
     } catch (error) {
       console.error('Action Error:', error);
