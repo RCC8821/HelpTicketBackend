@@ -1,30 +1,3 @@
-// const express = require('express');
-// const cors = require('cors');
-// require('dotenv').config();
-
-// const app = express();
-
-// app.use(cors());
-// app.use(express.json());
-// app.use(express.urlencoded({ extended: true }));
-
-// const authRoutes = require('./routes/auth');
-// const ticketRoutes = require('./routes/tickets');
-
-// app.use('/api/auth', authRoutes);
-// app.use('/api/tickets', ticketRoutes);
-
-// app.get('/', (req, res) => {
-//   res.json({ success: true, message: '🎫 HelpTicket Backend is running! 🚀' });
-// });
-
-// const PORT = process.env.PORT || 8000;
-
-// app.listen(PORT, () => {
-//   console.log(`\n=========================================`);
-//   console.log(`🚀 Server listening on http://localhost:${PORT}`);
-//   console.log(`=========================================\n`);
-// });
 
 
 
@@ -59,5 +32,5 @@ app.listen(PORT, () => {
 });
 
 
-// Pehle se app.listen(...) likha hoga, uske bilkul niche yeh likh dein:
+
 module.exports = app;

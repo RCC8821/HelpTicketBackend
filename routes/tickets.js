@@ -1,10 +1,12 @@
 
-
-
 // const express = require('express');
 // const router = express.Router();
 // const { Readable } = require('stream');
 // const { sheets, spreadsheetId, drive } = require('../config/googleSheet');
+// const NodeCache = require('node-cache'); // Added Node Cache
+
+// // Initialize node-cache: stdTTL 300 seconds (5 minutes), checks expired cache every 60 seconds
+// const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 // const TICKET_SHEET = 'Help_Ticket_FMS';
 // const DOER_SHEET = 'Doer_Name';
@@ -13,6 +15,13 @@
 // const HISTORY_SHEET = 'Revised_History';
 // const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; // Shared Drive Folder ID
 // const LAST_COL = 'AZ';
+
+// // Cache Keys Config
+// const CACHE_KEYS = {
+//   TICKETS_RAW: 'raw_tickets_rows',
+//   DROPDOWNS: 'dropdowns_data',
+//   TARGETS: 'user_targets_raw'
+// };
 
 // // ---------- Helpers ----------
 // const cleanKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -136,7 +145,6 @@
 //     return '';
 //   }
 //   try {
-//     // Single string ho ya Object ({ base64, mimeType, name } ya { data, type, name })
 //     let rawData = typeof fileInput === 'string' 
 //       ? fileInput 
 //       : (fileInput.base64 || fileInput.data || fileInput.url || '');
@@ -154,13 +162,11 @@
 //       return '';
 //     }
 
-//     // Base64 Data URI Prefix remove karein
 //     const cleanBase64 = rawData.replace(/^data:[^;]+;base64,/, '');
 //     const buffer = Buffer.from(cleanBase64, 'base64');
 
 //     console.log(`⏳ Uploading "${fileName}" (${buffer.length} bytes) to Drive...`);
 
-//     // Shared Drive Support Flags Added
 //     const r = await drive.files.create({
 //       requestBody: {
 //         name: fileName,
@@ -178,7 +184,6 @@
 //     const fileId = r.data.id;
 
 //     if (fileId) {
-//       // Shared Drive Permission Set
 //       try {
 //         await drive.permissions.create({
 //           fileId: fileId,
@@ -203,8 +208,16 @@
 
 // async function getUserTargets(userName) {
 //   try {
-//     const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
-//     const rows = res.data.values || [];
+//     let rows;
+//     // Check if targets list is in Cache
+//     if (appCache.has(CACHE_KEYS.TARGETS)) {
+//       rows = appCache.get(CACHE_KEYS.TARGETS);
+//     } else {
+//       const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
+//       rows = res.data.values || [];
+//       appCache.set(CACHE_KEYS.TARGETS, rows, 600); // Cache targets list for 10 minutes
+//     }
+
 //     if (rows.length < 2) return { monthTarget: null, weekTarget: null };
 //     const t = cleanKey(userName);
 //     for (let i = 1; i < rows.length; i++) {
@@ -220,9 +233,16 @@
 //   return { monthTarget: null, weekTarget: null };
 // }
 
-// // ---------- 1) Dropdowns ----------
+// // ---------- 1) Dropdowns (With Cache) ----------
 // router.get('/dropdowns', async (req, res) => {
 //   try {
+//     // If Dropdowns exist in cache, return immediately
+//     if (appCache.has(CACHE_KEYS.DROPDOWNS)) {
+//       console.log('⚡ [CACHE] Dropdowns returned from memory');
+//       return res.json(appCache.get(CACHE_KEYS.DROPDOWNS));
+//     }
+
+//     console.log('🌐 [SHEETS] Fetching dropdowns from Google Sheets');
 //     const locRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${LOC_SHEET}!A2:A1000` });
 //     const doerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${DOER_SHEET}!A2:B1000` });
 
@@ -231,25 +251,41 @@
 //     const pcs = doers.filter((d) => d[1] && cleanKey(d[1]) === 'pc').map((d) => d[0]);
 //     const solvers = doers.map((d) => d[0]).filter(Boolean);
 
-//     res.json({ success: true, locations, pcs, solvers });
+//     const dropdownResponse = { success: true, locations, pcs, solvers };
+    
+//     // Store dropdowns in cache for 1 hour (3600 seconds)
+//     appCache.set(CACHE_KEYS.DROPDOWNS, dropdownResponse, 3600);
+
+//     res.json(dropdownResponse);
 //   } catch (error) {
 //     console.error('Dropdown Error:', error);
 //     res.status(500).json({ success: false, locations: [], pcs: [], solvers: [] });
 //   }
 // });
 
-// // ---------- 2) Tickets list + myStats ----------
+// // ---------- 2) Tickets list + myStats (With Cache) ----------
 // router.get('/', async (req, res) => {
 //   const { userName, filterType } = req.query;
 //   if (!userName) return res.status(400).json({ success: false, message: 'User name required' });
 
 //   try {
-//     const response = await sheets.spreadsheets.values.get({
-//       spreadsheetId,
-//       range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
-//     });
+//     let rows;
 
-//     const rows = response.data.values || [];
+//     // Check if entire Ticket Rows data is cached
+//     if (appCache.has(CACHE_KEYS.TICKETS_RAW)) {
+//       console.log('⚡ [CACHE] Tickets raw rows loaded from cache');
+//       rows = appCache.get(CACHE_KEYS.TICKETS_RAW);
+//     } else {
+//       console.log('🌐 [SHEETS] Fetching raw tickets from Google Sheets');
+//       const response = await sheets.spreadsheets.values.get({
+//         spreadsheetId,
+//         range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
+//       });
+//       rows = response.data.values || [];
+//       // Cache the raw sheet values for 5 minutes (300 seconds)
+//       appCache.set(CACHE_KEYS.TICKETS_RAW, rows, 300);
+//     }
+
 //     const emptyStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
 //     if (rows.length < 2) {
 //       return res.json({ success: true, data: [], counts: { action: 0, raised: 0, assigned: 0 }, myStats: emptyStats });
@@ -385,7 +421,7 @@
 //   }
 // });
 
-// // ---------- 3) Create Ticket ----------
+// // ---------- 3) Create Ticket (With Cache Invalidation) ----------
 // router.post('/create', (req, res) => {
 //   const { loc, pc, solver, prio, date, issue, raisedBy, files, file, image } = req.body;
 
@@ -428,7 +464,7 @@
 //       const now = nowIST();
 //       const ticketId = `Help_${pad(now.getMonth() + 1)}/${String(now.getFullYear()).slice(-2)}_${String(maxNum + 1).padStart(3, '0')}`;
 
-//       // Image Extraction (Support files, file, image, payload formats)
+//       // Image Extraction
 //       const inputFiles = Array.isArray(files) ? files : (files ? [files] : (file ? [file] : (image ? [image] : [])));
 //       const urls = [];
 
@@ -479,6 +515,11 @@
 //       });
 
 //       console.log(`✅ Ticket ${ticketId} saved to Google Sheet Row ${targetRow}`);
+
+//       // 🔥 Invalidating Cache so that the next GET loads fresh values
+//       appCache.del(CACHE_KEYS.TICKETS_RAW);
+//       console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache because a new ticket was created');
+
 //       res.json({ success: true, message: 'Ticket raised successfully!', ticketId });
 //     } catch (error) {
 //       console.error('Create Ticket Error:', error);
@@ -488,7 +529,7 @@
 //   });
 // });
 
-// // ---------- 4) Ticket Actions ----------
+// // ---------- 4) Ticket Actions (With Cache Invalidation) ----------
 // router.post('/action', (req, res) => {
 //   console.log('📥 ACTION RAW BODY:', JSON.stringify(req.body, null, 2));
 
@@ -648,6 +689,11 @@
 //       }
 
 //       console.log('✅ Action success:', actionType, ticketId);
+
+//       // 🔥 Invalidating Cache so that the next GET loads fresh updated action status
+//       appCache.del(CACHE_KEYS.TICKETS_RAW);
+//       console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache due to action update');
+
 //       res.json({ success: true, message: 'Action completed successfully' });
 //     } catch (error) {
 //       console.error('Action Error:', error);
@@ -662,13 +708,14 @@
 
 
 
+
+
 const express = require('express');
 const router = express.Router();
 const { Readable } = require('stream');
 const { sheets, spreadsheetId, drive } = require('../config/googleSheet');
-const NodeCache = require('node-cache'); // Added Node Cache
+const NodeCache = require('node-cache');
 
-// Initialize node-cache: stdTTL 300 seconds (5 minutes), checks expired cache every 60 seconds
 const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 const TICKET_SHEET = 'Help_Ticket_FMS';
@@ -676,21 +723,17 @@ const DOER_SHEET = 'Doer_Name';
 const LOC_SHEET = 'Location';
 const TARGET_SHEET = 'Target';
 const HISTORY_SHEET = 'Revised_History';
-const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; // Shared Drive Folder ID
+const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; 
 const LAST_COL = 'AZ';
 
-// Cache Keys Config
 const CACHE_KEYS = {
   TICKETS_RAW: 'raw_tickets_rows',
   DROPDOWNS: 'dropdowns_data',
   TARGETS: 'user_targets_raw'
 };
 
-// ---------- Helpers ----------
 const cleanKey = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const pad = (n) => String(n).padStart(2, '0');
-
-// IST time
 const nowIST = () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
 const fmtDate = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 const fmtDateTime = (d) => `${fmtDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -713,7 +756,6 @@ const colLetter = (idx) => {
   return s;
 };
 
-// Lock
 let lockChain = Promise.resolve();
 const withLock = (fn) => {
   const run = lockChain.then(fn);
@@ -721,7 +763,6 @@ const withLock = (fn) => {
   return run;
 };
 
-// Recent submissions (duplicate guard)
 const recentSubmits = new Map();
 
 function findColIndex(headers, aliases) {
@@ -747,7 +788,6 @@ function parseSheetDate(val) {
   if (val instanceof Date && !isNaN(val.getTime())) return val;
   let str = String(val).trim().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
   if (!str) return null;
-
   const match = str.match(/^(\d{1,4})[\/\.-](\d{1,4})[\/\.-](\d{1,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
   if (match) {
     let p1 = parseInt(match[1], 10), p2 = parseInt(match[2], 10), p3 = parseInt(match[3], 10);
@@ -770,7 +810,6 @@ function parseSheetDate(val) {
   return isNaN(dFallback.getTime()) ? null : dFallback;
 }
 
-// Exact header map (row 6)
 async function getHeaderMap() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -782,7 +821,6 @@ async function getHeaderMap() {
   return { H, colCount: Math.max(headers.length, 1) };
 }
 
-// Flexible set helper
 const setFlex = (H, rowData, headerAliases, value) => {
   const aliases = Array.isArray(headerAliases) ? headerAliases : [headerAliases];
   for (const alias of aliases) {
@@ -801,51 +839,26 @@ const setFlex = (H, rowData, headerAliases, value) => {
   return false;
 };
 
-// 🔥 Google Drive Shared Drive Compatible Upload Function
 async function saveFile(fileInput, defaultName) {
-  if (!drive || !fileInput) {
-    console.error('❌ Drive instance missing or fileInput empty');
-    return '';
-  }
+  if (!drive || !fileInput) return '';
   try {
-    let rawData = typeof fileInput === 'string' 
-      ? fileInput 
-      : (fileInput.base64 || fileInput.data || fileInput.url || '');
-      
-    let fileName = (typeof fileInput === 'object' && fileInput.name) 
-      ? fileInput.name 
-      : defaultName;
-      
-    let fileMime = (typeof fileInput === 'object' && (fileInput.mimeType || fileInput.type)) 
-      ? (fileInput.mimeType || fileInput.type) 
-      : 'image/jpeg';
-
-    if (!rawData) {
-      console.error('❌ No Base64 data found in fileInput');
-      return '';
-    }
+    let rawData = typeof fileInput === 'string' ? fileInput : (fileInput.base64 || fileInput.data || fileInput.url || '');
+    let fileName = (typeof fileInput === 'object' && fileInput.name) ? fileInput.name : defaultName;
+    let fileMime = (typeof fileInput === 'object' && (fileInput.mimeType || fileInput.type)) ? (fileInput.mimeType || fileInput.type) : 'image/jpeg';
+    if (!rawData) return '';
 
     const cleanBase64 = rawData.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(cleanBase64, 'base64');
 
-    console.log(`⏳ Uploading "${fileName}" (${buffer.length} bytes) to Drive...`);
-
     const r = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [FOLDER_ID],
-      },
-      media: {
-        mimeType: fileMime,
-        body: Readable.from(buffer),
-      },
+      requestBody: { name: fileName, parents: [FOLDER_ID] },
+      media: { mimeType: fileMime, body: Readable.from(buffer) },
       fields: 'id, webViewLink, webContentLink',
       supportsAllDrives: true,
       supportsTeamDrives: true,
     });
 
     const fileId = r.data.id;
-
     if (fileId) {
       try {
         await drive.permissions.create({
@@ -854,17 +867,11 @@ async function saveFile(fileInput, defaultName) {
           supportsAllDrives: true,
           supportsTeamDrives: true,
         });
-      } catch (permErr) {
-        console.warn('⚠️ Permission warning:', permErr.message);
-      }
-
-      const link = r.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
-      console.log('✅ File uploaded successfully! Link:', link);
-      return link;
+      } catch (permErr) {}
+      return r.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
     }
     return '';
   } catch (e) {
-    console.error('❌ saveFile Drive Error:', e.message);
     return '';
   }
 }
@@ -872,13 +879,12 @@ async function saveFile(fileInput, defaultName) {
 async function getUserTargets(userName) {
   try {
     let rows;
-    // Check if targets list is in Cache
     if (appCache.has(CACHE_KEYS.TARGETS)) {
       rows = appCache.get(CACHE_KEYS.TARGETS);
     } else {
       const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
       rows = res.data.values || [];
-      appCache.set(CACHE_KEYS.TARGETS, rows, 600); // Cache targets list for 10 minutes
+      appCache.set(CACHE_KEYS.TARGETS, rows, 600);
     }
 
     if (rows.length < 2) return { monthTarget: null, weekTarget: null };
@@ -896,179 +902,129 @@ async function getUserTargets(userName) {
   return { monthTarget: null, weekTarget: null };
 }
 
-// ---------- 1) Dropdowns (With Cache) ----------
 router.get('/dropdowns', async (req, res) => {
   try {
-    // If Dropdowns exist in cache, return immediately
-    if (appCache.has(CACHE_KEYS.DROPDOWNS)) {
-      console.log('⚡ [CACHE] Dropdowns returned from memory');
-      return res.json(appCache.get(CACHE_KEYS.DROPDOWNS));
-    }
-
-    console.log('🌐 [SHEETS] Fetching dropdowns from Google Sheets');
+    if (appCache.has(CACHE_KEYS.DROPDOWNS)) return res.json(appCache.get(CACHE_KEYS.DROPDOWNS));
     const locRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${LOC_SHEET}!A2:A1000` });
     const doerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${DOER_SHEET}!A2:B1000` });
-
     const locations = (locRes.data.values || []).flat().filter(Boolean);
     const doers = doerRes.data.values || [];
     const pcs = doers.filter((d) => d[1] && cleanKey(d[1]) === 'pc').map((d) => d[0]);
     const solvers = doers.map((d) => d[0]).filter(Boolean);
-
     const dropdownResponse = { success: true, locations, pcs, solvers };
-    
-    // Store dropdowns in cache for 1 hour (3600 seconds)
     appCache.set(CACHE_KEYS.DROPDOWNS, dropdownResponse, 3600);
-
     res.json(dropdownResponse);
   } catch (error) {
-    console.error('Dropdown Error:', error);
     res.status(500).json({ success: false, locations: [], pcs: [], solvers: [] });
   }
 });
 
-// ---------- 2) Tickets list + myStats (With Cache) ----------
 router.get('/', async (req, res) => {
   const { userName, filterType } = req.query;
   if (!userName) return res.status(400).json({ success: false, message: 'User name required' });
 
   try {
     let rows;
-
-    // Check if entire Ticket Rows data is cached
     if (appCache.has(CACHE_KEYS.TICKETS_RAW)) {
-      console.log('⚡ [CACHE] Tickets raw rows loaded from cache');
       rows = appCache.get(CACHE_KEYS.TICKETS_RAW);
     } else {
-      console.log('🌐 [SHEETS] Fetching raw tickets from Google Sheets');
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
       });
       rows = response.data.values || [];
-      // Cache the raw sheet values for 5 minutes (300 seconds)
       appCache.set(CACHE_KEYS.TICKETS_RAW, rows, 300);
     }
 
     const emptyStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
+    // ✅ ADDED "revised" count here
     if (rows.length < 2) {
-      return res.json({ success: true, data: [], counts: { action: 0, raised: 0, assigned: 0 }, myStats: emptyStats });
+      return res.json({ success: true, data: [], counts: { action: 0, raised: 0, assigned: 0, revised: 0 }, myStats: emptyStats });
     }
 
     const headers = rows[0];
     const dataRows = rows.slice(1);
-
     const c = (aliases) => findColIndex(headers, aliases);
-    const colTimestamp = c(['Timestamp', 'Time', 'Date']);
-    const colTicketId = c(['Help_Ticket_No', 'Help Ticket No', 'Ticket_No']);
-    const colRaiser = c(['Raised_By', 'Raised By', 'Raiser']);
-    const colPC = c(['PC_Accountable_for_help_ticket', 'PC Accountable', 'PC']);
-    const colSolver = c(['Problem_Solver', 'Problem Solver', 'Solver', 'Doer']);
-    const colIssue = c(['Issue', 'Problem']);
-    const colLoc = c(['Location', 'Loc']);
-    const colPrio = c(['Priority']);
-    const colDate = c(['Desired_Date']);
-    const colImage = c(['Image_Upload', 'Image Upload', 'Image', 'Proof']);
-    const colStatus1 = c(['Status_1']);
-    const colRemark1 = c(['Remark_1']);
-    const colPlanned = c(['Doers_Planned_Date']);
-    const colActual = c(['Doers_Actual_Date']);
-    const colReviseCount = c(['Revise_Count']);
-    const colReviseDate = c(['Revise_Date']);
-    const colStatus2 = c(['Status_2']);
-    const colProof = c(['Proof_Upload_2', 'Proof Upload 2', 'Proof']);
-    const colRemark2 = c(['Remark_2']);
-    const colStatus3 = c(['Status_3']);
-    const colRemark3 = c(['Remark_3']);
-    const colStatus4 = c(['Status_4']);
-    const colRating = c(['Rating']);
-    const colReraise = c(['Reraise_Date']);
+    
+    const cols = {
+      Timestamp: c(['Timestamp', 'Time', 'Date']), TicketId: c(['Help_Ticket_No', 'Help Ticket No', 'Ticket_No']),
+      Raiser: c(['Raised_By', 'Raised By', 'Raiser']), PC: c(['PC_Accountable_for_help_ticket', 'PC Accountable', 'PC']),
+      Solver: c(['Problem_Solver', 'Problem Solver', 'Solver', 'Doer']), Issue: c(['Issue', 'Problem']),
+      Loc: c(['Location', 'Loc']), Prio: c(['Priority']), Date: c(['Desired_Date']),
+      Image: c(['Image_Upload', 'Image Upload', 'Image', 'Proof']), Status1: c(['Status_1']), Remark1: c(['Remark_1']),
+      Planned: c(['Doers_Planned_Date']), Actual: c(['Doers_Actual_Date']), ReviseCount: c(['Revise_Count']),
+      ReviseDate: c(['Revise_Date']), Status2: c(['Status_2']), Proof: c(['Proof_Upload_2', 'Proof Upload 2', 'Proof']),
+      Remark2: c(['Remark_2']), Status3: c(['Status_3']), Remark3: c(['Remark_3']), Status4: c(['Status_4']),
+      Rating: c(['Rating']), Reraise: c(['Reraise_Date'])
+    };
 
     const now = nowIST();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const dow = todayStart.getDay();
-    const diffToMonday = dow === 0 ? 6 : dow - 1;
-    const weekStart = new Date(todayStart);
-    weekStart.setDate(todayStart.getDate() - diffToMonday);
+    const weekStart = new Date(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1)));
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
 
     const me = cleanKey(userName);
-    const counts = { action: 0, raised: 0, assigned: 0 };
+    // ✅ ADDED "revised" count object
+    const counts = { action: 0, raised: 0, assigned: 0, revised: 0 };
     const myStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
     const filteredData = [];
 
     dataRows.forEach((row) => {
-      const ticketId = getVal(row, colTicketId);
+      const ticketId = getVal(row, cols.TicketId);
       if (!ticketId) return;
 
-      const raiserRaw = getVal(row, colRaiser);
-      const pcRaw = getVal(row, colPC);
-      const solverRaw = getVal(row, colSolver);
+      const raiserRaw = getVal(row, cols.Raiser);
+      const pcRaw = getVal(row, cols.PC);
+      const solverRaw = getVal(row, cols.Solver);
 
       const isRaiserMe = cleanKey(raiserRaw) === me;
       const isPcMe = cleanKey(pcRaw) === me;
       const isSolverMe = cleanKey(solverRaw) === me;
 
-      const s1 = cleanKey(getVal(row, colStatus1));
-      const s2 = cleanKey(getVal(row, colStatus2));
-      const s3 = cleanKey(getVal(row, colStatus3));
-      const s4 = cleanKey(getVal(row, colStatus4));
+      const s1 = cleanKey(getVal(row, cols.Status1));
+      const s2 = cleanKey(getVal(row, cols.Status2));
+      const s3 = cleanKey(getVal(row, cols.Status3));
+      const s4 = cleanKey(getVal(row, cols.Status4));
 
-      const tsDate = parseSheetDate(getVal(row, colTimestamp));
+      const tsDate = parseSheetDate(getVal(row, cols.Timestamp));
       if (tsDate) {
-        if (isRaiserMe) {
-          if (tsDate >= weekStart) myStats.weekRaised++;
-          if (tsDate >= monthStart) myStats.monthRaised++;
-        }
-        if (isSolverMe && s2 === 'solved') {
-          if (tsDate >= weekStart) myStats.weekSolved++;
-          if (tsDate >= monthStart) myStats.monthSolved++;
-        }
+        if (isRaiserMe) { if (tsDate >= weekStart) myStats.weekRaised++; if (tsDate >= monthStart) myStats.monthRaised++; }
+        if (isSolverMe && s2 === 'solved') { if (tsDate >= weekStart) myStats.weekSolved++; if (tsDate >= monthStart) myStats.monthSolved++; }
       }
 
       if (s4 === 'closed' || s1 === 'reject') return;
 
       const isAssignedToMe = isPcMe || isSolverMe;
+      
       const isActionable =
         (isPcMe && s1 !== 'done') ||
         (isSolverMe && s1 === 'done' && s2 !== 'solved') ||
         (isPcMe && s2 === 'solved' && s3 !== 'verified') ||
         (isRaiserMe && s3 === 'verified');
 
+      // ✅ NEW LOGIC FOR REVISED TAB (S2 is Pending Revision)
+      const isRevisedTab = isAssignedToMe && (s2 === 'pendingrevision' || s2.includes('revision'));
+
       if (isActionable) counts.action++;
       if (isRaiserMe) counts.raised++;
       if (isAssignedToMe) counts.assigned++;
+      if (isRevisedTab) counts.revised++;
 
       const include =
         (filterType === 'action' && isActionable) ||
         (filterType === 'raised' && isRaiserMe) ||
-        (filterType === 'assigned' && isAssignedToMe);
+        (filterType === 'assigned' && isAssignedToMe) ||
+        (filterType === 'revised' && isRevisedTab); // ✅ Include logic added
 
       if (include) {
         filteredData.push({
-          ticketId,
-          timestamp: getVal(row, colTimestamp),
-          issue: getVal(row, colIssue) || 'No description',
-          location: getVal(row, colLoc) || 'N/A',
-          raiser: raiserRaw || 'Unknown',
-          pc: pcRaw || 'N/A',
-          solver: solverRaw || 'Unknown',
-          priority: getVal(row, colPrio) || 'Low',
-          desiredDate: getVal(row, colDate) || '',
-          image: getVal(row, colImage),
-          status1: getVal(row, colStatus1),
-          remark1: getVal(row, colRemark1),
-          plannedDate: getVal(row, colPlanned),
-          actualDate: getVal(row, colActual),
-          reviseCount: getVal(row, colReviseCount) || '0',
-          reviseDate: getVal(row, colReviseDate),
-          status2: getVal(row, colStatus2),
-          proof: getVal(row, colProof),
-          remark2: getVal(row, colRemark2),
-          status3: getVal(row, colStatus3),
-          remark3: getVal(row, colRemark3),
-          status4: getVal(row, colStatus4),
-          rating: getVal(row, colRating),
-          reraiseDate: getVal(row, colReraise),
+          ticketId, timestamp: getVal(row, cols.Timestamp), issue: getVal(row, cols.Issue) || 'No description',
+          location: getVal(row, cols.Loc) || 'N/A', raiser: raiserRaw || 'Unknown',
+          pc: pcRaw || 'N/A', solver: solverRaw || 'Unknown', priority: getVal(row, cols.Prio) || 'Low',
+          desiredDate: getVal(row, cols.Date) || '', image: getVal(row, cols.Image), status1: getVal(row, cols.Status1),
+          remark1: getVal(row, cols.Remark1), plannedDate: getVal(row, cols.Planned), actualDate: getVal(row, cols.Actual),
+          reviseCount: getVal(row, cols.ReviseCount) || '0', reviseDate: getVal(row, cols.ReviseDate), status2: getVal(row, cols.Status2),
+          proof: getVal(row, cols.Proof), remark2: getVal(row, cols.Remark2), status3: getVal(row, cols.Status3),
+          remark3: getVal(row, cols.Remark3), status4: getVal(row, cols.Status4), rating: getVal(row, cols.Rating), reraiseDate: getVal(row, cols.Reraise),
         });
       }
     });
@@ -1079,25 +1035,17 @@ router.get('/', async (req, res) => {
 
     res.json({ success: true, data: filteredData.reverse(), counts, myStats });
   } catch (error) {
-    console.error('Tickets Fetch Error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch tickets' });
   }
 });
 
-// ---------- 3) Create Ticket (With Cache Invalidation) ----------
 router.post('/create', (req, res) => {
   const { loc, pc, solver, prio, date, issue, raisedBy, files, file, image } = req.body;
+  if (!loc || !issue || !pc || !solver) return res.status(400).json({ success: false, message: 'Please fill all required fields' });
 
-  if (!loc || !issue || !pc || !solver) {
-    return res.status(400).json({ success: false, message: 'Please fill all required fields' });
-  }
-
-  // Duplicate guard
   const key = [raisedBy, issue, loc, pc, solver].map((v) => String(v || '').trim()).join('|');
   const last = recentSubmits.get(key);
-  if (last && Date.now() - last < 60000) {
-    return res.status(409).json({ success: false, message: 'Duplicate ticket detected. Please wait a minute.' });
-  }
+  if (last && Date.now() - last < 60000) return res.status(409).json({ success: false, message: 'Duplicate ticket detected.' });
   recentSubmits.set(key, Date.now());
   setTimeout(() => recentSubmits.delete(key), 65000);
 
@@ -1105,20 +1053,12 @@ router.post('/create', (req, res) => {
     try {
       const { H, colCount } = await getHeaderMap();
       const idCol = H['Help_Ticket_No'] !== undefined ? H['Help_Ticket_No'] : H['Help Ticket No'];
-      if (idCol === undefined) throw new Error('Help_Ticket_No column not found in Header Row 6');
       const idL = colLetter(idCol);
-
-      const idRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${TICKET_SHEET}!${idL}7:${idL}5000`,
-      });
+      const idRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TICKET_SHEET}!${idL}7:${idL}5000` });
       const idVals = idRes.data.values || [];
 
       let maxNum = 0;
-      idVals.forEach((r) => {
-        const m = String((r && r[0]) || '').trim().match(/_(\d+)$/);
-        if (m) { const n = parseInt(m[1], 10); if (n > maxNum) maxNum = n; }
-      });
+      idVals.forEach((r) => { const m = String((r && r[0]) || '').trim().match(/_(\d+)$/); if (m) { const n = parseInt(m[1], 10); if (n > maxNum) maxNum = n; } });
 
       let emptyIdx = idVals.findIndex((r) => !String((r && r[0]) || '').trim());
       if (emptyIdx === -1) emptyIdx = idVals.length;
@@ -1127,30 +1067,19 @@ router.post('/create', (req, res) => {
       const now = nowIST();
       const ticketId = `Help_${pad(now.getMonth() + 1)}/${String(now.getFullYear()).slice(-2)}_${String(maxNum + 1).padStart(3, '0')}`;
 
-      // Image Extraction
       const inputFiles = Array.isArray(files) ? files : (files ? [files] : (file ? [file] : (image ? [image] : [])));
       const urls = [];
-
       for (let i = 0; i < inputFiles.length; i++) {
-        const f = inputFiles[i];
-        const u = await saveFile(f, `${ticketId}_Issue_${i + 1}.jpg`);
+        const u = await saveFile(inputFiles[i], `${ticketId}_Issue_${i + 1}.jpg`);
         if (u) urls.push(u);
       }
 
-      console.log(`📁 Saved ${urls.length} file URL(s) for ${ticketId}:`, urls);
-
-      // Formulas preserve logic
-      const fRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${TICKET_SHEET}!A${targetRow}:${LAST_COL}${targetRow}`,
-        valueRenderOption: 'FORMULA',
-      });
+      const fRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TICKET_SHEET}!A${targetRow}:${LAST_COL}${targetRow}`, valueRenderOption: 'FORMULA' });
       const existing = (fRes.data.values && fRes.data.values[0]) || [];
       const total = Math.max(colCount, existing.length);
       const rowData = new Array(total).fill('');
 
       const set = (alias, val) => setFlex(H, rowData, alias, val);
-
       set(['Timestamp', 'Time'], fmtDateTime(now));
       set(['Help_Ticket_No', 'Help Ticket No'], ticketId);
       set(['Location', 'Loc'], loc);
@@ -1163,52 +1092,24 @@ router.post('/create', (req, res) => {
       set(['Priority'], prio || 'Low');
       set(['Status_1', 'Status 1'], '');
 
-      // Existing Formulas retain
-      for (let i = 0; i < existing.length; i++) {
-        if (typeof existing[i] === 'string' && existing[i].startsWith('=') && !rowData[i]) {
-          rowData[i] = existing[i];
-        }
-      }
+      for (let i = 0; i < existing.length; i++) { if (typeof existing[i] === 'string' && existing[i].startsWith('=') && !rowData[i]) { rowData[i] = existing[i]; } }
 
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${TICKET_SHEET}!A${targetRow}:${colLetter(total - 1)}${targetRow}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [rowData] },
-      });
-
-      console.log(`✅ Ticket ${ticketId} saved to Google Sheet Row ${targetRow}`);
-
-      // 🔥 Invalidating Cache so that the next GET loads fresh values
+      await sheets.spreadsheets.values.update({ spreadsheetId, range: `${TICKET_SHEET}!A${targetRow}:${colLetter(total - 1)}${targetRow}`, valueInputOption: 'USER_ENTERED', requestBody: { values: [rowData] } });
       appCache.del(CACHE_KEYS.TICKETS_RAW);
-      console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache because a new ticket was created');
-
       res.json({ success: true, message: 'Ticket raised successfully!', ticketId });
     } catch (error) {
-      console.error('Create Ticket Error:', error);
-      recentSubmits.delete(key);
-      res.status(500).json({ success: false, message: 'Failed to create ticket: ' + error.message });
+      recentSubmits.delete(key); res.status(500).json({ success: false, message: 'Failed to create ticket' });
     }
   });
 });
 
-// ---------- 4) Ticket Actions (With Cache Invalidation) ----------
 router.post('/action', (req, res) => {
-  console.log('📥 ACTION RAW BODY:', JSON.stringify(req.body, null, 2));
-
   const body = req.body || {};
   const actionType = body.actionType || body.action || '';
   const payload = (body.payload && typeof body.payload === 'object') ? body.payload : body;
   const ticketId = payload.ticketId || body.ticketId || payload.id || body.id || '';
 
-  if (!actionType || !ticketId) {
-    return res.status(400).json({
-      success: false,
-      message: 'actionType and ticketId required',
-      received: { actionType, ticketId, bodyKeys: Object.keys(body) },
-    });
-  }
-
+  if (!actionType || !ticketId) return res.status(400).json({ success: false, message: 'Required fields missing' });
   payload.ticketId = ticketId;
 
   withLock(async () => {
@@ -1217,19 +1118,13 @@ router.post('/action', (req, res) => {
       const idCol = H['Help_Ticket_No'] !== undefined ? H['Help_Ticket_No'] : H['Help Ticket No'];
       const idL = colLetter(idCol);
 
-      const idRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${TICKET_SHEET}!${idL}7:${idL}5000`,
-      });
+      const idRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TICKET_SHEET}!${idL}7:${idL}5000` });
       const ids = (idRes.data.values || []).map((r) => String((r && r[0]) || '').trim());
       const rowIdx = ids.indexOf(String(payload.ticketId).trim());
       if (rowIdx === -1) return res.json({ success: false, message: 'Ticket Not Found' });
       const row = rowIdx + 7;
 
-      const rowRes = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${TICKET_SHEET}!A${row}:${LAST_COL}${row}`,
-      });
+      const rowRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TICKET_SHEET}!A${row}:${LAST_COL}${row}` });
       const rowVals = (rowRes.data.values && rowRes.data.values[0]) || [];
 
       const now = nowIST();
@@ -1239,129 +1134,61 @@ router.post('/action', (req, res) => {
       const set = (headerAliases, value) => {
         const aliases = Array.isArray(headerAliases) ? headerAliases : [headerAliases];
         for (const alias of aliases) {
-          if (H[alias] !== undefined) {
-            updates.push({ name: alias, value });
-            return;
-          }
+          if (H[alias] !== undefined) { updates.push({ name: alias, value }); return; }
           const targetKey = cleanKey(alias);
-          for (const key in H) {
-            if (cleanKey(key) === targetKey) {
-              updates.push({ name: key, value });
-              return;
-            }
-          }
+          for (const key in H) { if (cleanKey(key) === targetKey) { updates.push({ name: key, value }); return; } }
         }
       };
 
-      const cell = (alias) => {
-        const idx = findColIndex(Object.keys(H), Array.isArray(alias) ? alias : [alias]);
-        return (idx !== -1 && rowVals[idx] !== undefined) ? rowVals[idx] : '';
-      };
-
-      const lapsMinutes = (plannedName) => {
-        const p = parseSheetDate(cell(plannedName));
-        return p ? Math.round((now.getTime() - p.getTime()) / 60000) : null;
-      };
+      const cell = (alias) => { const idx = findColIndex(Object.keys(H), Array.isArray(alias) ? alias : [alias]); return (idx !== -1 && rowVals[idx] !== undefined) ? rowVals[idx] : ''; };
+      const lapsMinutes = (plannedName) => { const p = parseSheetDate(cell(plannedName)); return p ? Math.round((now.getTime() - p.getTime()) / 60000) : null; };
 
       const logHistory = async (date, count) => {
-        try {
-          await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: `${HISTORY_SHEET}!A1`,
-            valueInputOption: 'USER_ENTERED',
-            requestBody: { values: [[payload.ticketId, date, count]] },
-          });
-        } catch (e) { console.error('History log error:', e.message); }
+        try { await sheets.spreadsheets.values.append({ spreadsheetId, range: `${HISTORY_SHEET}!A1`, valueInputOption: 'USER_ENTERED', requestBody: { values: [[payload.ticketId, date, count]] } }); } catch (e) {}
       };
 
       if (actionType === 'step2') {
-        set(['Status_1', 'Status 1'], payload.status);
-        set(['Remark_1', 'Remark 1'], payload.remark || '');
-        set(['Doers_Planned_Date', 'Doers Planned Date'], formatDateForSheet(payload.nextDate));
-        set(['Actual_1', 'Actual 1'], ts);
-        const lap = lapsMinutes('Planned_1');
-        if (lap !== null) set(['check_Timelaps'], lap);
+        set(['Status_1', 'Status 1'], payload.status); set(['Remark_1', 'Remark 1'], payload.remark || ''); set(['Doers_Planned_Date', 'Doers Planned Date'], formatDateForSheet(payload.nextDate)); set(['Actual_1', 'Actual 1'], ts);
+        const lap = lapsMinutes('Planned_1'); if (lap !== null) set(['check_Timelaps'], lap);
       }
       else if (actionType === 'step3') {
         if (payload.subAction === 'revise') {
           const cur = parseInt(cell('Revise_Count'), 10) || 0;
           if (cur >= 3) return res.json({ success: false, message: 'Maximum 3 revisions allowed.' });
-          const newCount = cur + 1;
-          const rd = formatDateForSheet(payload.reviseDate);
-          set(['Revise_Count', 'Revise Count'], newCount);
-          set(['Revise_Date', 'Revise Date'], rd);
-          set(['Doers_Planned_Date', 'Doers Planned Date'], rd);
-          set(['Status_2', 'Status 2'], 'Pending Revision');
-          set(['Remark_2', 'Remark 2'], payload.remark || '');
+          const newCount = cur + 1; const rd = formatDateForSheet(payload.reviseDate);
+          set(['Revise_Count', 'Revise Count'], newCount); set(['Revise_Date', 'Revise Date'], rd); set(['Doers_Planned_Date', 'Doers Planned Date'], rd); set(['Status_2', 'Status 2'], 'Pending Revision'); set(['Remark_2', 'Remark 2'], payload.remark || '');
           await logHistory(rd, newCount);
         } else {
           const inputFiles = Array.isArray(payload.files) ? payload.files : (payload.files ? [payload.files] : (payload.file ? [payload.file] : (payload.image ? [payload.image] : [])));
           const urls = [];
-          for (let i = 0; i < inputFiles.length; i++) {
-            const u = await saveFile(inputFiles[i], `${payload.ticketId}_Proof_${i + 1}.jpg`);
-            if (u) urls.push(u);
-          }
-          set(['Doers_Actual_Date', 'Doers Actual Date'], ts);
-          set(['Status_2', 'Status 2'], 'Solved');
-          if (urls.length) set(['Proof_Upload_2', 'Proof Upload 2', 'Proof'], urls.join(', '));
-          set(['Remark_2', 'Remark 2'], payload.remark || '');
+          for (let i = 0; i < inputFiles.length; i++) { const u = await saveFile(inputFiles[i], `${payload.ticketId}_Proof_${i + 1}.jpg`); if (u) urls.push(u); }
+          set(['Doers_Actual_Date', 'Doers Actual Date'], ts); set(['Status_2', 'Status 2'], 'Solved');
+          if (urls.length) set(['Proof_Upload_2', 'Proof Upload 2', 'Proof'], urls.join(', ')); set(['Remark_2', 'Remark 2'], payload.remark || '');
         }
       }
       else if (actionType === 'step4') {
-        set(['Status_3', 'Status 3'], 'Verified');
-        set(['Remark_3', 'Remark 3'], payload.remark || '');
-        set(['Actual_3', 'Actual 3'], ts);
-        const lap = lapsMinutes('Planned_3');
-        if (lap !== null) set(['followup_Timelaps'], lap);
+        set(['Status_3', 'Status 3'], 'Verified'); set(['Remark_3', 'Remark 3'], payload.remark || ''); set(['Actual_3', 'Actual 3'], ts);
+        const lap = lapsMinutes('Planned_3'); if (lap !== null) set(['followup_Timelaps'], lap);
       }
       else if (actionType === 'step5') {
         if (payload.subAction === 'close') {
-          set(['Status_4', 'Status 4'], 'Closed');
-          set(['Rating'], payload.rating);
-          set(['Actual_4', 'Actual 4'], ts);
-          const lap = lapsMinutes('Planned_4');
-          if (lap !== null) set(['final_Timelaps'], lap);
+          set(['Status_4', 'Status 4'], 'Closed'); set(['Rating'], payload.rating); set(['Actual_4', 'Actual 4'], ts);
+          const lap = lapsMinutes('Planned_4'); if (lap !== null) set(['final_Timelaps'], lap);
         } else {
-          const newCount = (parseInt(cell('Revise_Count'), 10) || 0) + 1;
-          const rd = formatDateForSheet(payload.reraiseDate);
-          set(['Revise_Count', 'Revise Count'], newCount);
-          set(['Reraise_Date', 'Reraise Date'], rd);
-          set(['Doers_Planned_Date', 'Doers Planned Date'], rd);
-          set(['Status_4', 'Status 4'], 'Reraised');
-          set(['Status_2', 'Status 2'], 'Pending');
-          set(['Status_3', 'Status 3'], '');
-          set(['Revise_Date', 'Revise Date'], '');
+          const newCount = (parseInt(cell('Revise_Count'), 10) || 0) + 1; const rd = formatDateForSheet(payload.reraiseDate);
+          set(['Revise_Count', 'Revise Count'], newCount); set(['Reraise_Date', 'Reraise Date'], rd); set(['Doers_Planned_Date', 'Doers Planned Date'], rd); set(['Status_4', 'Status 4'], 'Reraised'); set(['Status_2', 'Status 2'], 'Pending'); set(['Status_3', 'Status 3'], ''); set(['Revise_Date', 'Revise Date'], '');
           await logHistory(rd, newCount);
         }
-      }
-      else {
-        return res.status(400).json({ success: false, message: 'Unknown actionType: ' + actionType });
       }
 
       if (updates.length) {
         await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId,
-          requestBody: {
-            valueInputOption: 'USER_ENTERED',
-            data: updates.map((u) => ({
-              range: `${TICKET_SHEET}!${colLetter(H[u.name])}${row}`,
-              values: [[u.value === undefined || u.value === null ? '' : u.value]],
-            })),
-          },
+          spreadsheetId, requestBody: { valueInputOption: 'USER_ENTERED', data: updates.map((u) => ({ range: `${TICKET_SHEET}!${colLetter(H[u.name])}${row}`, values: [[u.value === undefined || u.value === null ? '' : u.value]] })) }
         });
       }
-
-      console.log('✅ Action success:', actionType, ticketId);
-
-      // 🔥 Invalidating Cache so that the next GET loads fresh updated action status
       appCache.del(CACHE_KEYS.TICKETS_RAW);
-      console.log('🗑️ [CACHE CLEARED] Invalidated ticket list cache due to action update');
-
       res.json({ success: true, message: 'Action completed successfully' });
-    } catch (error) {
-      console.error('Action Error:', error);
-      res.status(500).json({ success: false, message: 'Server Error: ' + error.message });
-    }
+    } catch (error) { res.status(500).json({ success: false, message: 'Server Error' }); }
   });
 });
 
