@@ -708,8 +708,6 @@
 
 
 
-
-
 const express = require('express');
 const router = express.Router();
 const { Readable } = require('stream');
@@ -723,7 +721,7 @@ const DOER_SHEET = 'Doer_Name';
 const LOC_SHEET = 'Location';
 const TARGET_SHEET = 'Target';
 const HISTORY_SHEET = 'Revised_History';
-const FOLDER_ID = '0ALRcS1YOamZmUk9PVA'; 
+const FOLDER_ID = '0ALRcS1YOamZmUk9PVA';
 const LAST_COL = 'AZ';
 
 const CACHE_KEYS = {
@@ -876,29 +874,35 @@ async function saveFile(fileInput, defaultName) {
   }
 }
 
+// ✅ FIXED: Week Target = Column B (Target column). Naam na mile to null.
 async function getUserTargets(userName) {
   try {
     let rows;
     if (appCache.has(CACHE_KEYS.TARGETS)) {
       rows = appCache.get(CACHE_KEYS.TARGETS);
     } else {
-      const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C100` });
+      const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TARGET_SHEET}!A1:C200` });
       rows = res.data.values || [];
       appCache.set(CACHE_KEYS.TARGETS, rows, 600);
     }
 
     if (rows.length < 2) return { monthTarget: null, weekTarget: null };
+
     const t = cleanKey(userName);
     for (let i = 1; i < rows.length; i++) {
-      if (cleanKey(rows[i][0]) === t) {
-        const mv = rows[i][1], wv = rows[i][2];
+      const rowName = cleanKey(rows[i][0]);
+      if (rowName && rowName === t) {
+        const targetVal = rows[i][1]; // ✅ Column B = Target (monthly target hi week target hoga)
+        const num = targetVal !== undefined && targetVal !== '' ? Number(targetVal) : null;
         return {
-          monthTarget: mv !== undefined && mv !== '' ? Number(mv) : null,
-          weekTarget: wv !== undefined && wv !== '' ? Number(wv) : null,
+          monthTarget: num,
+          weekTarget: num  // ✅ Dono me same value
         };
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('getUserTargets error:', e);
+  }
   return { monthTarget: null, weekTarget: null };
 }
 
@@ -919,25 +923,26 @@ router.get('/dropdowns', async (req, res) => {
   }
 });
 
+// ---------- Tickets list + myStats ----------
 router.get('/', async (req, res) => {
   const { userName, filterType } = req.query;
   if (!userName) return res.status(400).json({ success: false, message: 'User name required' });
 
   try {
     let rows;
-    if (appCache.has(CACHE_KEYS.TICKETS_RAW)) {
+    if (appCache.has(CACHE_KEYS.TICKETS_RAW) && req.query.force !== 'true') {
       rows = appCache.get(CACHE_KEYS.TICKETS_RAW);
     } else {
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range: `${TICKET_SHEET}!A6:${LAST_COL}5000`,
+        valueRenderOption: 'FORMATTED_VALUE',
       });
       rows = response.data.values || [];
       appCache.set(CACHE_KEYS.TICKETS_RAW, rows, 300);
     }
 
     const emptyStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
-    // ✅ ADDED "revised" count here
     if (rows.length < 2) {
       return res.json({ success: true, data: [], counts: { action: 0, raised: 0, assigned: 0, revised: 0 }, myStats: emptyStats });
     }
@@ -945,17 +950,37 @@ router.get('/', async (req, res) => {
     const headers = rows[0];
     const dataRows = rows.slice(1);
     const c = (aliases) => findColIndex(headers, aliases);
-    
+
     const cols = {
-      Timestamp: c(['Timestamp', 'Time', 'Date']), TicketId: c(['Help_Ticket_No', 'Help Ticket No', 'Ticket_No']),
-      Raiser: c(['Raised_By', 'Raised By', 'Raiser']), PC: c(['PC_Accountable_for_help_ticket', 'PC Accountable', 'PC']),
-      Solver: c(['Problem_Solver', 'Problem Solver', 'Solver', 'Doer']), Issue: c(['Issue', 'Problem']),
-      Loc: c(['Location', 'Loc']), Prio: c(['Priority']), Date: c(['Desired_Date']),
-      Image: c(['Image_Upload', 'Image Upload', 'Image', 'Proof']), Status1: c(['Status_1']), Remark1: c(['Remark_1']),
-      Planned: c(['Doers_Planned_Date']), Actual: c(['Doers_Actual_Date']), ReviseCount: c(['Revise_Count']),
-      ReviseDate: c(['Revise_Date']), Status2: c(['Status_2']), Proof: c(['Proof_Upload_2', 'Proof Upload 2', 'Proof']),
-      Remark2: c(['Remark_2']), Status3: c(['Status_3']), Remark3: c(['Remark_3']), Status4: c(['Status_4']),
-      Rating: c(['Rating']), Reraise: c(['Reraise_Date'])
+      Timestamp: c(['Timestamp', 'Time', 'Date']),
+      TicketId: c(['Help_Ticket_No', 'Help Ticket No', 'Ticket_No']),
+      Raiser: c(['Raised_By', 'Raised By', 'Raiser']),
+      PC: c(['PC_Accountable_for_help_ticket', 'PC Accountable', 'PC']),
+      Solver: c(['Problem_Solver', 'Problem Solver', 'Solver', 'Doer']),
+      Issue: c(['Issue', 'Problem']),
+      Loc: c(['Location', 'Loc']),
+      Prio: c(['Priority']),
+      Date: c(['Desired_Date']),
+      Image: c(['Image_Upload', 'Image Upload', 'Image', 'Proof']),
+      Status1: c(['Status_1']),
+      Remark1: c(['Remark_1']),
+      DoersPlannedDate: c(['Doers_Planned_Date']),
+      Planned1: c(['Planned_1']),
+      Planned3: c(['Planned_3']),
+      Planned4: c(['Planned_4']),
+      Actual: c(['Doers_Actual_Date']),
+      Actual3: c(['Actual_3', 'Actual 3']),   // ✅ NEW
+      ReviseCount: c(['Revise_Count']),
+      ReviseDate: c(['Revise_Date']),
+      Status2: c(['Status_2']),
+      Proof: c(['Proof_Upload_2', 'Proof Upload 2', 'Proof']),
+      Remark2: c(['Remark_2']),
+      Status3: c(['Status_3']),
+      Remark3: c(['Remark_3']),
+      Status4: c(['Status_4']),
+      Rating: c(['Rating']),
+      Reraise: c(['Reraise_Date']),
+      TimeLapsP: c(['check_Timelaps', 'Timelaps', 'P'])
     };
 
     const now = nowIST();
@@ -963,7 +988,6 @@ router.get('/', async (req, res) => {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
 
     const me = cleanKey(userName);
-    // ✅ ADDED "revised" count object
     const counts = { action: 0, raised: 0, assigned: 0, revised: 0 };
     const myStats = { weekRaised: 0, monthRaised: 0, weekSolved: 0, monthSolved: 0, monthTarget: '-', weekTarget: '-' };
     const filteredData = [];
@@ -979,6 +1003,7 @@ router.get('/', async (req, res) => {
       const isRaiserMe = cleanKey(raiserRaw) === me;
       const isPcMe = cleanKey(pcRaw) === me;
       const isSolverMe = cleanKey(solverRaw) === me;
+      const isMyTicket = isPcMe || isSolverMe || isRaiserMe;
 
       const s1 = cleanKey(getVal(row, cols.Status1));
       const s2 = cleanKey(getVal(row, cols.Status2));
@@ -994,15 +1019,14 @@ router.get('/', async (req, res) => {
       if (s4 === 'closed' || s1 === 'reject') return;
 
       const isAssignedToMe = isPcMe || isSolverMe;
-      
+
       const isActionable =
         (isPcMe && s1 !== 'done') ||
         (isSolverMe && s1 === 'done' && s2 !== 'solved') ||
         (isPcMe && s2 === 'solved' && s3 !== 'verified') ||
         (isRaiserMe && s3 === 'verified');
 
-      // ✅ NEW LOGIC FOR REVISED TAB (S2 is Pending Revision)
-      const isRevisedTab = isAssignedToMe && (s2 === 'pendingrevision' || s2.includes('revision'));
+      const isRevisedTab = isMyTicket && (s2 === 'pendingrevision' || s2.includes('revision'));
 
       if (isActionable) counts.action++;
       if (isRaiserMe) counts.raised++;
@@ -1013,18 +1037,39 @@ router.get('/', async (req, res) => {
         (filterType === 'action' && isActionable) ||
         (filterType === 'raised' && isRaiserMe) ||
         (filterType === 'assigned' && isAssignedToMe) ||
-        (filterType === 'revised' && isRevisedTab); // ✅ Include logic added
+        (filterType === 'revised' && isRevisedTab);
 
       if (include) {
         filteredData.push({
-          ticketId, timestamp: getVal(row, cols.Timestamp), issue: getVal(row, cols.Issue) || 'No description',
-          location: getVal(row, cols.Loc) || 'N/A', raiser: raiserRaw || 'Unknown',
-          pc: pcRaw || 'N/A', solver: solverRaw || 'Unknown', priority: getVal(row, cols.Prio) || 'Low',
-          desiredDate: getVal(row, cols.Date) || '', image: getVal(row, cols.Image), status1: getVal(row, cols.Status1),
-          remark1: getVal(row, cols.Remark1), plannedDate: getVal(row, cols.Planned), actualDate: getVal(row, cols.Actual),
-          reviseCount: getVal(row, cols.ReviseCount) || '0', reviseDate: getVal(row, cols.ReviseDate), status2: getVal(row, cols.Status2),
-          proof: getVal(row, cols.Proof), remark2: getVal(row, cols.Remark2), status3: getVal(row, cols.Status3),
-          remark3: getVal(row, cols.Remark3), status4: getVal(row, cols.Status4), rating: getVal(row, cols.Rating), reraiseDate: getVal(row, cols.Reraise),
+          ticketId,
+          timestamp: getVal(row, cols.Timestamp),
+          issue: getVal(row, cols.Issue) || 'No description',
+          location: getVal(row, cols.Loc) || 'N/A',
+          raiser: raiserRaw || 'Unknown',
+          pc: pcRaw || 'N/A',
+          solver: solverRaw || 'Unknown',
+          priority: getVal(row, cols.Prio) || 'Low',
+          desiredDate: getVal(row, cols.Date) || '',
+          image: getVal(row, cols.Image),
+          status1: getVal(row, cols.Status1),
+          remark1: getVal(row, cols.Remark1),
+          plannedDate: getVal(row, cols.DoersPlannedDate),
+          planned1: getVal(row, cols.Planned1),
+          planned3: getVal(row, cols.Planned3),
+          planned4: getVal(row, cols.Planned4),
+          actualDate: getVal(row, cols.Actual),
+          actual3: getVal(row, cols.Actual3),        // ✅ NEW
+          reviseCount: getVal(row, cols.ReviseCount) || '0',
+          reviseDate: getVal(row, cols.ReviseDate),
+          status2: getVal(row, cols.Status2),
+          proof: getVal(row, cols.Proof),
+          remark2: getVal(row, cols.Remark2),
+          status3: getVal(row, cols.Status3),
+          remark3: getVal(row, cols.Remark3),
+          status4: getVal(row, cols.Status4),
+          rating: getVal(row, cols.Rating),
+          reraiseDate: getVal(row, cols.Reraise),
+          sheetTimeLeft: getVal(row, cols.TimeLapsP),
         });
       }
     });
@@ -1035,6 +1080,7 @@ router.get('/', async (req, res) => {
 
     res.json({ success: true, data: filteredData.reverse(), counts, myStats });
   } catch (error) {
+    console.error('Tickets Fetch Error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch tickets' });
   }
 });
@@ -1098,7 +1144,8 @@ router.post('/create', (req, res) => {
       appCache.del(CACHE_KEYS.TICKETS_RAW);
       res.json({ success: true, message: 'Ticket raised successfully!', ticketId });
     } catch (error) {
-      recentSubmits.delete(key); res.status(500).json({ success: false, message: 'Failed to create ticket' });
+      recentSubmits.delete(key);
+      res.status(500).json({ success: false, message: 'Failed to create ticket' });
     }
   });
 });
@@ -1148,47 +1195,97 @@ router.post('/action', (req, res) => {
       };
 
       if (actionType === 'step2') {
-        set(['Status_1', 'Status 1'], payload.status); set(['Remark_1', 'Remark 1'], payload.remark || ''); set(['Doers_Planned_Date', 'Doers Planned Date'], formatDateForSheet(payload.nextDate)); set(['Actual_1', 'Actual 1'], ts);
-        const lap = lapsMinutes('Planned_1'); if (lap !== null) set(['check_Timelaps'], lap);
+        set(['Status_1', 'Status 1'], payload.status);
+        set(['Remark_1', 'Remark 1'], payload.remark || '');
+        // ✅ FIX: Sirf tabhi date set karo jab actual value ho
+        if (payload.nextDate && String(payload.nextDate).trim() !== '') {
+          set(['Doers_Planned_Date', 'Doers Planned Date'], formatDateForSheet(payload.nextDate));
+        }
+        set(['Actual_1', 'Actual 1'], ts);
+        const lap = lapsMinutes('Planned_1');
+        if (lap !== null) set(['check_Timelaps'], lap);
       }
       else if (actionType === 'step3') {
         if (payload.subAction === 'revise') {
           const cur = parseInt(cell('Revise_Count'), 10) || 0;
           if (cur >= 3) return res.json({ success: false, message: 'Maximum 3 revisions allowed.' });
-          const newCount = cur + 1; const rd = formatDateForSheet(payload.reviseDate);
-          set(['Revise_Count', 'Revise Count'], newCount); set(['Revise_Date', 'Revise Date'], rd); set(['Doers_Planned_Date', 'Doers Planned Date'], rd); set(['Status_2', 'Status 2'], 'Pending Revision'); set(['Remark_2', 'Remark 2'], payload.remark || '');
+
+          // ✅ FIX: Revision sirf planned date ke baad allowed
+          const lastDateStr = cell('Revise_Date') || cell('Doers_Planned_Date');
+          const lastDate = parseSheetDate(lastDateStr);
+          if (lastDate) {
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const lastDayStart = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate());
+            if (todayStart < lastDayStart) {
+              return res.json({ success: false, message: `Revision allowed only on/after planned date (${lastDateStr}).` });
+            }
+          }
+
+          const newCount = cur + 1;
+          const rd = formatDateForSheet(payload.reviseDate);
+          set(['Revise_Count', 'Revise Count'], newCount);
+          set(['Revise_Date', 'Revise Date'], rd);
+          set(['Doers_Planned_Date', 'Doers Planned Date'], rd);
+          set(['Status_2', 'Status 2'], 'Pending Revision');
+          set(['Remark_2', 'Remark 2'], payload.remark || '');
           await logHistory(rd, newCount);
         } else {
           const inputFiles = Array.isArray(payload.files) ? payload.files : (payload.files ? [payload.files] : (payload.file ? [payload.file] : (payload.image ? [payload.image] : [])));
           const urls = [];
           for (let i = 0; i < inputFiles.length; i++) { const u = await saveFile(inputFiles[i], `${payload.ticketId}_Proof_${i + 1}.jpg`); if (u) urls.push(u); }
-          set(['Doers_Actual_Date', 'Doers Actual Date'], ts); set(['Status_2', 'Status 2'], 'Solved');
-          if (urls.length) set(['Proof_Upload_2', 'Proof Upload 2', 'Proof'], urls.join(', ')); set(['Remark_2', 'Remark 2'], payload.remark || '');
+          set(['Doers_Actual_Date', 'Doers Actual Date'], ts);
+          set(['Status_2', 'Status 2'], 'Solved');
+          if (urls.length) set(['Proof_Upload_2', 'Proof Upload 2', 'Proof'], urls.join(', '));
+          set(['Remark_2', 'Remark 2'], payload.remark || '');
         }
       }
       else if (actionType === 'step4') {
-        set(['Status_3', 'Status 3'], 'Verified'); set(['Remark_3', 'Remark 3'], payload.remark || ''); set(['Actual_3', 'Actual 3'], ts);
-        const lap = lapsMinutes('Planned_3'); if (lap !== null) set(['followup_Timelaps'], lap);
+        set(['Status_3', 'Status 3'], 'Verified');
+        set(['Remark_3', 'Remark 3'], payload.remark || '');
+        set(['Actual_3', 'Actual 3'], ts);
+        const lap = lapsMinutes('Planned_3');
+        if (lap !== null) set(['followup_Timelaps'], lap);
       }
       else if (actionType === 'step5') {
         if (payload.subAction === 'close') {
-          set(['Status_4', 'Status 4'], 'Closed'); set(['Rating'], payload.rating); set(['Actual_4', 'Actual 4'], ts);
-          const lap = lapsMinutes('Planned_4'); if (lap !== null) set(['final_Timelaps'], lap);
+          set(['Status_4', 'Status 4'], 'Closed');
+          set(['Rating'], payload.rating);
+          set(['Actual_4', 'Actual 4'], ts);
+          const lap = lapsMinutes('Planned_4');
+          if (lap !== null) set(['final_Timelaps'], lap);
         } else {
-          const newCount = (parseInt(cell('Revise_Count'), 10) || 0) + 1; const rd = formatDateForSheet(payload.reraiseDate);
-          set(['Revise_Count', 'Revise Count'], newCount); set(['Reraise_Date', 'Reraise Date'], rd); set(['Doers_Planned_Date', 'Doers Planned Date'], rd); set(['Status_4', 'Status 4'], 'Reraised'); set(['Status_2', 'Status 2'], 'Pending'); set(['Status_3', 'Status 3'], ''); set(['Revise_Date', 'Revise Date'], '');
+          // ✅ FIX: Reraise pe bhi 3-revision limit check
+          const cur = parseInt(cell('Revise_Count'), 10) || 0;
+          if (cur >= 3) return res.json({ success: false, message: 'Maximum 3 revisions allowed.' });
+
+          const newCount = cur + 1;
+          const rd = formatDateForSheet(payload.reraiseDate);
+          set(['Revise_Count', 'Revise Count'], newCount);
+          set(['Reraise_Date', 'Reraise Date'], rd);
+          set(['Doers_Planned_Date', 'Doers Planned Date'], rd);
+          set(['Status_4', 'Status 4'], 'Reraised');
+          set(['Status_2', 'Status 2'], 'Pending');
+          set(['Status_3', 'Status 3'], '');
+          set(['Revise_Date', 'Revise Date'], '');
           await logHistory(rd, newCount);
         }
       }
 
       if (updates.length) {
         await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId, requestBody: { valueInputOption: 'USER_ENTERED', data: updates.map((u) => ({ range: `${TICKET_SHEET}!${colLetter(H[u.name])}${row}`, values: [[u.value === undefined || u.value === null ? '' : u.value]] })) }
+          spreadsheetId,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: updates.map((u) => ({ range: `${TICKET_SHEET}!${colLetter(H[u.name])}${row}`, values: [[u.value === undefined || u.value === null ? '' : u.value]] }))
+          }
         });
       }
       appCache.del(CACHE_KEYS.TICKETS_RAW);
       res.json({ success: true, message: 'Action completed successfully' });
-    } catch (error) { res.status(500).json({ success: false, message: 'Server Error' }); }
+    } catch (error) {
+      console.error('Action Error:', error);
+      res.status(500).json({ success: false, message: 'Server Error' });
+    }
   });
 });
 
